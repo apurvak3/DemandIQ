@@ -1,120 +1,235 @@
+# app.py
+# DemandIQ - Professional Streamlit E-commerce Demand Forecasting Dashboard
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
-from statsmodels.tsa.arima.model import ARIMA
+import plotly.express as px
+import plotly.graph_objects as go
 from prophet import Prophet
-from sklearn.metrics import mean_squared_error
-from math import sqrt
 
-st.set_page_config(layout="wide")
-st.title('Demand Forecasting with Time Series Models')
+# ---------------- PAGE CONFIG ---------------- #
+st.set_page_config(
+    page_title="DemandIQ",
+    page_icon="📈",
+    layout="wide"
+)
 
-# --- 1. Data Loading --- #
-st.header('1. Data Loading and Preprocessing')
+st.title("📈 DemandIQ - Smart Retail Demand Forecasting")
+st.markdown("AI Powered E-commerce Analytics Dashboard")
 
+# ---------------- LOAD DATA ---------------- #
 @st.cache_data
-def load_data(file_path='demand.csv'):
-    data = pd.read_csv(file_path)
-    data['week'] = pd.to_datetime(data['week'], format='%d/%m/%y')
-    return data
+def load_data():
+    df = pd.read_csv("demand.csv")
+    df["week"] = pd.to_datetime(df["week"], format="%d/%m/%y")
+    return df
 
 df = load_data()
 
-st.subheader('Raw Data Preview')
-st.write(df.head())
+# ---------------- DATA PREPROCESS ---------------- #
+df["revenue"] = df["units_sold"] * df["total_price"]
+df["discount"] = df["base_price"] - df["total_price"]
 
-# --- 2. Data Preprocessing --- #
+# ---------------- SIDEBAR ---------------- #
+st.sidebar.title("Navigation")
 
-st.subheader('Handling Missing Values')
-# Fill the missing value in 'total_price' with the median of 'total_price' for the corresponding 'sku_id'
-median_price_per_sku = df.groupby('sku_id')['total_price'].median()
-df['total_price'].fillna(df['sku_id'].map(median_price_per_sku), inplace=True)
-st.write(f"Missing values after filling: {df['total_price'].isnull().sum()}")
+page = st.sidebar.selectbox(
+    "Select Module",
+    [
+        "Dashboard",
+        "Demand Forecast",
+        "Product Analysis",
+        "Store Analysis",
+        "Promotion Impact",
+        "Pricing Insights"
+    ]
+)
 
+# ==========================================================
+# DASHBOARD
+# ==========================================================
+if page == "Dashboard":
 
-st.subheader('Aggregating Data to Weekly Frequency')
-df.set_index('week', inplace=True)
-weekly_data = df['units_sold'].resample('W').sum()
-st.write(weekly_data.head())
+    st.subheader("📊 Business Overview")
 
-# --- 3. Model Training and Prediction --- #
-st.header('2. Model Training and Evaluation')
+    col1, col2, col3, col4 = st.columns(4)
 
-# Split data into train and test sets
-train_data = weekly_data[:int(0.8 * len(weekly_data))]
-test_data = weekly_data[int(0.8 * len(weekly_data)):]
+    col1.metric("Total Sales Units", int(df["units_sold"].sum()))
+    col2.metric("Revenue", f"₹ {round(df['revenue'].sum(),2)}")
+    col3.metric("Products", df["sku_id"].nunique())
+    col4.metric("Stores", df["store_id"].nunique())
 
-# Initialize RMSE storage
-rmse_results = {}
-predictions = {}
+    st.markdown("---")
 
-# --- ARIMA Model ---
-st.subheader('ARIMA Model')
-try:
-    with st.spinner('Training ARIMA Model...'):
-        arima_model = ARIMA(train_data, order=(1, 0, 0)).fit()
-        arima_predictions = arima_model.predict(start=test_data.index[0], end=test_data.index[-1])
-        arima_rmse = sqrt(mean_squared_error(test_data, arima_predictions))
-        rmse_results['ARIMA'] = arima_rmse
-        predictions['ARIMA'] = arima_predictions
-    st.success(f'ARIMA RMSE: {arima_rmse:.2f}')
-except Exception as e:
-    st.error(f'ARIMA Model training failed: {e}')
+    col1, col2 = st.columns(2)
 
-# --- Prophet Model ---
-st.subheader('Prophet Model')
-try:
-    # Prepare data for Prophet
-    prophet_data = weekly_data.reset_index()
-    prophet_data.columns = ['ds', 'y']
-    train_data_prophet = prophet_data[:int(0.8 * len(prophet_data))]
-    test_data_prophet = prophet_data[int(0.8 * len(prophet_data)):]
+    with col1:
+        weekly_sales = df.groupby("week")["units_sold"].sum().reset_index()
 
-    with st.spinner('Training Prophet Model...'):
-        prophet_model = Prophet(yearly_seasonality=True, weekly_seasonality=False, daily_seasonality=False)
-        prophet_model.fit(train_data_prophet)
+        fig = px.line(
+            weekly_sales,
+            x="week",
+            y="units_sold",
+            title="Weekly Sales Trend"
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-        # Create future dataframe for predictions
-        prophet_future = prophet_model.make_future_dataframe(periods=len(test_data), freq='W')
-        prophet_predictions_df = prophet_model.predict(prophet_future)
-        
-        # Extract predictions for the test period
-        prophet_predictions = prophet_predictions_df.set_index('ds')['yhat'].loc[test_data.index]
-        prophet_rmse = sqrt(mean_squared_error(test_data, prophet_predictions))
-        rmse_results['Prophet'] = prophet_rmse
-        predictions['Prophet'] = prophet_predictions
-    st.success(f'Prophet RMSE: {prophet_rmse:.2f}')
-except Exception as e:
-    st.error(f'Prophet Model training failed: {e}')
+    with col2:
+        top_products = df.groupby("sku_id")["units_sold"].sum().reset_index()
+        top_products = top_products.sort_values(by="units_sold", ascending=False).head(10)
 
+        fig = px.bar(
+            top_products,
+            x="sku_id",
+            y="units_sold",
+            title="Top 10 Products"
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-# --- 4. Model Comparison --- #
-st.header('3. Model Comparison')
-if rmse_results:
-    best_model_name = min(rmse_results, key=rmse_results.get)
-    st.write(f"The best performing model is: **{best_model_name}** with RMSE: {rmse_results[best_model_name]:.2f}")
-    st.write("RMSEs for all models:", rmse_results)
-else:
-    st.warning("No models were successfully trained.")
+# ==========================================================
+# DEMAND FORECAST
+# ==========================================================
+elif page == "Demand Forecast":
 
-# --- 5. Visualization --- #
-st.header('4. Forecast Visualization')
+    st.subheader("🔮 Product Demand Forecast")
 
-fig, ax = plt.subplots(figsize=(15, 6))
-ax.plot(weekly_data.index, weekly_data, label='Original Data')
-ax.plot(train_data.index, train_data, label='Training Data', color='blue')
-ax.plot(test_data.index, test_data, label='Actual Test Data', color='orange')
+    sku = st.selectbox("Select Product SKU", df["sku_id"].unique())
 
-for model_name, model_predictions in predictions.items():
-    ax.plot(test_data.index, model_predictions, label=f'{model_name} Forecast', linestyle='--')
+    product_df = df[df["sku_id"] == sku]
 
-ax.set_title('Demand Forecast Comparison')
-ax.set_xlabel('Week')
-ax.set_ylabel('Units Sold')
-ax.legend()
-ax.grid(True)
-st.pyplot(fig)
+    ts = product_df.groupby("week")["units_sold"].sum().reset_index()
+    ts.columns = ["ds", "y"]
+
+    if len(ts) < 10:
+        st.warning("Not enough data for forecasting.")
+    else:
+        model = Prophet()
+        model.fit(ts)
+
+        future = model.make_future_dataframe(periods=12, freq="W")
+        forecast = model.predict(future)
+
+        fig = px.line(
+            forecast,
+            x="ds",
+            y="yhat",
+            title=f"Next 12 Weeks Forecast for SKU {sku}"
+        )
+
+        fig.add_scatter(
+            x=ts["ds"],
+            y=ts["y"],
+            mode="lines+markers",
+            name="Actual Sales"
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        future_sales = round(forecast["yhat"].tail(12).sum())
+        st.success(f"Expected Next 12 Weeks Sales: {future_sales} Units")
+
+# ==========================================================
+# PRODUCT ANALYSIS
+# ==========================================================
+elif page == "Product Analysis":
+
+    st.subheader("🛍️ Product Performance")
+
+    product_stats = df.groupby("sku_id").agg({
+        "units_sold":"sum",
+        "revenue":"sum",
+        "discount":"mean"
+    }).reset_index()
+
+    product_stats = product_stats.sort_values(by="units_sold", ascending=False)
+
+    st.dataframe(product_stats.head(20))
+
+    fig = px.scatter(
+        product_stats,
+        x="discount",
+        y="units_sold",
+        size="revenue",
+        title="Discount vs Sales"
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# ==========================================================
+# STORE ANALYSIS
+# ==========================================================
+elif page == "Store Analysis":
+
+    st.subheader("🏬 Store Performance")
+
+    store_stats = df.groupby("store_id").agg({
+        "units_sold":"sum",
+        "revenue":"sum"
+    }).reset_index()
+
+    st.dataframe(store_stats.sort_values(by="revenue", ascending=False).head(20))
+
+    fig = px.bar(
+        store_stats.sort_values(by="revenue", ascending=False).head(15),
+        x="store_id",
+        y="revenue",
+        title="Top Revenue Stores"
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# ==========================================================
+# PROMOTION IMPACT
+# ==========================================================
+elif page == "Promotion Impact":
+
+    st.subheader("🎯 Promotion Effectiveness")
+
+    featured = df.groupby("is_featured_sku")["units_sold"].mean().reset_index()
+    display = df.groupby("is_display_sku")["units_sold"].mean().reset_index()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig = px.bar(
+            featured,
+            x="is_featured_sku",
+            y="units_sold",
+            title="Featured Product Impact"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        fig = px.bar(
+            display,
+            x="is_display_sku",
+            y="units_sold",
+            title="Display Product Impact"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+# ==========================================================
+# PRICING INSIGHTS
+# ==========================================================
+elif page == "Pricing Insights":
+
+    st.subheader("💰 Pricing Optimization")
+
+    avg_discount = round(df["discount"].mean(),2)
+    avg_price = round(df["total_price"].mean(),2)
+
+    col1, col2 = st.columns(2)
+
+    col1.metric("Average Discount", avg_discount)
+    col2.metric("Average Selling Price", avg_price)
+
+    fig = px.scatter(
+        df.sample(3000),
+        x="total_price",
+        y="units_sold",
+        color="discount",
+        title="Price vs Units Sold"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.info("Use lower pricing where demand is sensitive. Use premium pricing where demand remains stable.")
